@@ -12,6 +12,15 @@ internal static class InputSimulator
         NativeMethods.SetCursorPos(x, y);
     }
 
+    /// <summary>
+    /// Moves the cursor to (x, y) in a straight line over time, like a hand would.
+    /// <paramref name="pixelsPerSecond"/> of 0 or less jumps there instantly.
+    /// </summary>
+    public static void MoveToHumanLike(int x, int y, double pixelsPerSecond)
+    {
+        HumanMouse.MoveTo(x, y, pixelsPerSecond);
+    }
+
     public static void Click(int x, int y, MouseButtonKind button)
     {
         MoveTo(x, y);

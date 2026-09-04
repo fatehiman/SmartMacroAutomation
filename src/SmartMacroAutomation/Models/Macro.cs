@@ -14,5 +14,13 @@ public class Macro
     /// </summary>
     public double Speed { get; set; } = 1.0;
 
+    /// <summary>
+    /// How fast the cursor travels to a recorded click position during playback, in pixels
+    /// per second (average over the move). The cursor glides there in a straight line with a
+    /// human-like slow-fast-slow profile instead of jumping. 0 = jump instantly (old behaviour).
+    /// Also scaled by <see cref="Speed"/>.
+    /// </summary>
+    public double MouseMoveSpeed { get; set; } = 1600.0;
+
     public List<ActionRecord> Actions { get; set; } = new();
 }

@@ -51,8 +51,10 @@ internal sealed class MacroPlayer
                 {
                     // Move to the target first so any hover-triggered UI change (e.g. a
                     // button lighting up) has the chance to happen before we verify and click,
-                    // exactly like it did live when this macro was recorded.
-                    InputSimulator.MoveTo(action.X, action.Y);
+                    // exactly like it did live when this macro was recorded. The cursor glides
+                    // there in a straight line at a human-like speed rather than teleporting,
+                    // so applications that watch mouse movement see a plausible gesture.
+                    InputSimulator.MoveToHumanLike(action.X, action.Y, EffectiveMouseMoveSpeed());
                     Sleep(action.DelayMs);
 
                     if (!ExecuteMouseClick(action))
@@ -83,6 +85,23 @@ internal sealed class MacroPlayer
         int scaled = (int)Math.Round(recordedDelayMs / speed);
         if (scaled > 0)
             System.Threading.Thread.Sleep(scaled);
+    }
+
+    /// <summary>
+    /// Cursor travel speed in pixels per second, scaled by the macro's speed multiplier.
+    /// Returns 0 when the move should be an instant jump (mouse speed disabled, or speed = 10x).
+    /// </summary>
+    private double EffectiveMouseMoveSpeed()
+    {
+        double configured = _macro.MouseMoveSpeed;
+        if (configured <= 0)
+            return 0;
+
+        double speed = _macro.Speed <= 0 ? 1.0 : _macro.Speed;
+        if (speed >= 10.0)
+            return 0;
+
+        return configured * speed;
     }
 
     private bool ExecuteMouseClick(ActionRecord action)

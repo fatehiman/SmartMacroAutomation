@@ -28,7 +28,7 @@ The goal is to provide the simplicity of traditional macro automation while maki
 
 ### Per-macro playback settings
 
-Each macro stores three settings in its `actions.json` (editable from the main window, or by hand via **Edit in Notepad**):
+Each macro stores four settings in its `actions.json` (editable from the main window, or by hand via **Edit in Notepad**):
 
 * **Similarity threshold** - default 99%, as described above.
 * **Repeat count** - how many times Play runs the whole macro in a row. 1 to 999, default 1.
@@ -37,9 +37,28 @@ Each macro stores three settings in its `actions.json` (editable from the main w
   * `1.5` = 1.5x faster (a recorded 3s wait becomes 2s).
   * `10.0` = all delays removed, macro runs as fast as possible.
 
+* **Mouse move speed** - how fast the cursor travels to a recorded click position, in pixels per second (average over the move). Range 0 to 20000, default 1600. `0` means jump instantly to the coordinate (the old behaviour).
+
 During recording, the time between every action is captured exactly as it happened - including how long the mouse hovered somewhere before a click, and how long a key was held down or how long the pause was between keystrokes. Speed scales all of that; it does not change *what* was recorded, only *how fast* it is replayed.
 
 Before verifying and clicking, the mouse is moved to the recorded position first and then the (speed-scaled) recorded wait is applied - reproducing any hover state the target UI element had at recording time (e.g. a button that only lights up while the mouse is over it) before the screenshot comparison happens.
+
+### Human-like mouse movement
+
+The cursor never teleports to a recorded coordinate. It travels there in a **straight line over time**, with a slow-fast-slow (ease-in-out) speed profile, updated about 100 times per second. So if the cursor sits at `(1000, 900)` and the next recorded click is at `(200, 400)`, it glides along the direct line between the two points instead of appearing at the target in one frame.
+
+Only the click *position* is recorded - the recorder does not capture the path the hand actually took. The movement during playback is generated from the recorded start and end points.
+
+Details:
+
+* Path: a straight line from the current cursor position to the target.
+* Duration: `distance / mouse move speed`, clamped to 40 ms - 5000 ms.
+* Speed curve: `0.5 - 0.5 * cos(pi * t)` - starts at zero speed, peaks in the middle, ends at zero speed.
+* Moves shorter than 3 pixels are placed directly (nothing to animate).
+* The **Speed** multiplier also scales the mouse move speed, so a 2.0x macro moves the cursor twice as fast. At `Speed = 10.0` ("as fast as possible") the cursor jumps instantly.
+* The final position is always set exactly to the recorded coordinate, so rounding during the glide cannot shift the click by a pixel.
+
+The implementation lives in `Native/HumanMouse.cs`, separate from the playback engine, so a more advanced path model (curves, small jitter, overshoot) can replace it later without touching `MacroPlayer`.
 
 ### Building from source
 
@@ -63,7 +82,7 @@ This produces `publish/SmartMacroAutomation.exe`, a single file that runs on Win
 2. Select it in the list and click **Start Recording**. Perform your mouse clicks and keyboard actions in any application.
 3. Click **Stop Recording** (in the SmartMacroAutomation window) to save the macro.
 4. Optionally click **Review Screenshots** to inspect or crop the reference image captured for each click.
-5. Adjust **Similarity threshold**, **Repeat count**, and **Speed** for the selected macro as needed - changes save immediately.
+5. Adjust **Similarity threshold**, **Repeat count**, **Speed**, and **Mouse move speed** for the selected macro as needed - changes save immediately.
 6. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue.
 7. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
 
@@ -156,7 +175,7 @@ Before every recorded mouse click, SmartMacroAutomation performs a visual verifi
 
 The process is:
 
-1. Navigate to the recorded click position.
+1. Move the cursor to the recorded click position, gliding there in a straight line at a human-like speed.
 2. Capture a new screenshot of the corresponding area.
 3. Compare the new screenshot with the reference screenshot recorded earlier.
 4. Calculate the visual similarity.
@@ -393,6 +412,8 @@ or, where appropriate, a sequence of text input may be represented as a text-ent
 * Configurable repeat count (run a macro multiple times in a row)
 * Configurable playback speed, scaling all recorded delays (0.1x-10x)
 * Mouse moved to the recorded position before verification, so hover-triggered UI changes are reproduced
+* Human-like cursor movement: straight-line glide with ease-in-out speed instead of an instant jump
+* Configurable mouse move speed in pixels per second (0 = instant jump)
 * Direct macro editing via Notepad
 
 ---
@@ -427,6 +448,7 @@ The visual verification system should be designed independently from the macro r
 
 Potential future capabilities include:
 
+* Curved / jittered mouse paths and overshoot for even more human-like movement
 * Template matching
 * Perceptual image comparison
 * Feature-based image matching

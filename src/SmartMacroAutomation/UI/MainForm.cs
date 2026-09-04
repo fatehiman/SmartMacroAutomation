@@ -27,6 +27,9 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _speedInput = new() { Minimum = 0.1m, Maximum = 10m, DecimalPlaces = 1, Increment = 0.1m, Value = 1.0m, Dock = DockStyle.Top };
     private readonly Label _speedLabel = new() { Text = "Speed (1.0 = as recorded, 10.0 = no delay):", Dock = DockStyle.Top, Height = 32 };
 
+    private readonly NumericUpDown _mouseSpeedInput = new() { Minimum = 0, Maximum = 20000, DecimalPlaces = 0, Increment = 100, Value = 1600, Dock = DockStyle.Top };
+    private readonly Label _mouseSpeedLabel = new() { Text = "Mouse move speed (px/sec, 0 = instant jump):", Dock = DockStyle.Top, Height = 32 };
+
     private readonly Label _statusLabel = new() { Dock = DockStyle.Bottom, Height = 46, Text = "Ready.", TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
 
     private MacroRecorder? _recorder;
@@ -46,6 +49,8 @@ public sealed class MainForm : Form
         leftPanel.Controls.Add(_editButton);
         leftPanel.Controls.Add(_reviewButton);
         leftPanel.Controls.Add(_playButton);
+        leftPanel.Controls.Add(_mouseSpeedInput);
+        leftPanel.Controls.Add(_mouseSpeedLabel);
         leftPanel.Controls.Add(_speedInput);
         leftPanel.Controls.Add(_speedLabel);
         leftPanel.Controls.Add(_repeatInput);
@@ -77,6 +82,7 @@ public sealed class MainForm : Form
         _thresholdInput.ValueChanged += (_, _) => SaveCurrentSettings();
         _repeatInput.ValueChanged += (_, _) => SaveCurrentSettings();
         _speedInput.ValueChanged += (_, _) => SaveCurrentSettings();
+        _mouseSpeedInput.ValueChanged += (_, _) => SaveCurrentSettings();
         Load += (_, _) => RefreshMacroList();
     }
 
@@ -106,6 +112,7 @@ public sealed class MainForm : Form
             _thresholdInput.Value = (decimal)Math.Clamp(macro?.SimilarityThreshold ?? 99.0, (double)_thresholdInput.Minimum, (double)_thresholdInput.Maximum);
             _repeatInput.Value = Math.Clamp(macro?.RepeatCount ?? 1, (int)_repeatInput.Minimum, (int)_repeatInput.Maximum);
             _speedInput.Value = (decimal)Math.Clamp(macro?.Speed ?? 1.0, (double)_speedInput.Minimum, (double)_speedInput.Maximum);
+            _mouseSpeedInput.Value = (decimal)Math.Clamp(macro?.MouseMoveSpeed ?? 1600.0, (double)_mouseSpeedInput.Minimum, (double)_mouseSpeedInput.Maximum);
         }
         finally
         {
@@ -126,6 +133,7 @@ public sealed class MainForm : Form
         macro.SimilarityThreshold = (double)_thresholdInput.Value;
         macro.RepeatCount = (int)_repeatInput.Value;
         macro.Speed = (double)_speedInput.Value;
+        macro.MouseMoveSpeed = (double)_mouseSpeedInput.Value;
         MacroStorage.SaveMacro(macro);
     }
 
@@ -151,7 +159,8 @@ public sealed class MainForm : Form
             Name = name,
             SimilarityThreshold = (double)_thresholdInput.Value,
             RepeatCount = (int)_repeatInput.Value,
-            Speed = (double)_speedInput.Value
+            Speed = (double)_speedInput.Value,
+            MouseMoveSpeed = (double)_mouseSpeedInput.Value
         };
         MacroStorage.SaveMacro(macro);
         RefreshMacroList();
@@ -217,6 +226,7 @@ public sealed class MainForm : Form
         macro.SimilarityThreshold = (double)_thresholdInput.Value;
         macro.RepeatCount = (int)_repeatInput.Value;
         macro.Speed = (double)_speedInput.Value;
+        macro.MouseMoveSpeed = (double)_mouseSpeedInput.Value;
 
         string imagesFolder = MacroStorage.GetImagesFolder(_recordingMacroName);
         Directory.CreateDirectory(imagesFolder);
