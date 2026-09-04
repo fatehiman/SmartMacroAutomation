@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing.Imaging;
 using SmartMacroAutomation.Models;
 using SmartMacroAutomation.Playback;
@@ -11,28 +12,44 @@ public sealed class MainForm : Form
     private readonly ListBox _macroList = new() { Dock = DockStyle.Fill };
     private readonly Button _newButton = new() { Text = "New Macro", Dock = DockStyle.Top, Height = 32 };
     private readonly Button _deleteButton = new() { Text = "Delete Macro", Dock = DockStyle.Top, Height = 32 };
+    private readonly Button _editButton = new() { Text = "Edit in Notepad", Dock = DockStyle.Top, Height = 32 };
     private readonly Button _recordButton = new() { Text = "Start Recording", Dock = DockStyle.Top, Height = 40 };
     private readonly Button _stopButton = new() { Text = "Stop Recording", Dock = DockStyle.Top, Height = 40, Enabled = false };
     private readonly Button _playButton = new() { Text = "Play Macro", Dock = DockStyle.Top, Height = 40 };
     private readonly Button _reviewButton = new() { Text = "Review Screenshots", Dock = DockStyle.Top, Height = 32 };
+
     private readonly NumericUpDown _thresholdInput = new() { Minimum = 50, Maximum = 100, DecimalPlaces = 1, Increment = 0.5m, Value = 99, Dock = DockStyle.Top };
     private readonly Label _thresholdLabel = new() { Text = "Similarity threshold (%):", Dock = DockStyle.Top, Height = 20 };
+
+    private readonly NumericUpDown _repeatInput = new() { Minimum = 1, Maximum = 999, DecimalPlaces = 0, Increment = 1, Value = 1, Dock = DockStyle.Top };
+    private readonly Label _repeatLabel = new() { Text = "Repeat count:", Dock = DockStyle.Top, Height = 20 };
+
+    private readonly NumericUpDown _speedInput = new() { Minimum = 0.1m, Maximum = 10m, DecimalPlaces = 1, Increment = 0.1m, Value = 1.0m, Dock = DockStyle.Top };
+    private readonly Label _speedLabel = new() { Text = "Speed (1.0 = as recorded, 10.0 = no delay):", Dock = DockStyle.Top, Height = 32 };
+
     private readonly Label _statusLabel = new() { Dock = DockStyle.Bottom, Height = 46, Text = "Ready.", TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
 
     private MacroRecorder? _recorder;
     private string? _recordingMacroName;
     private bool _isPlaying;
+    private bool _loadingSettings;
 
     public MainForm()
     {
         Text = "SmartMacroAutomation";
         Width = 640;
-        Height = 480;
+        Height = 560;
         StartPosition = FormStartPosition.CenterScreen;
 
-        var leftPanel = new Panel { Dock = DockStyle.Left, Width = 220, Padding = new Padding(8) };
+        var leftPanel = new Panel { Dock = DockStyle.Left, Width = 240, Padding = new Padding(8), AutoScroll = true };
+        // Added in reverse order because Dock = Top stacks each new control above the previous one.
+        leftPanel.Controls.Add(_editButton);
         leftPanel.Controls.Add(_reviewButton);
         leftPanel.Controls.Add(_playButton);
+        leftPanel.Controls.Add(_speedInput);
+        leftPanel.Controls.Add(_speedLabel);
+        leftPanel.Controls.Add(_repeatInput);
+        leftPanel.Controls.Add(_repeatLabel);
         leftPanel.Controls.Add(_stopButton);
         leftPanel.Controls.Add(_recordButton);
         leftPanel.Controls.Add(_thresholdInput);
@@ -51,10 +68,15 @@ public sealed class MainForm : Form
 
         _newButton.Click += NewButton_Click;
         _deleteButton.Click += DeleteButton_Click;
+        _editButton.Click += EditButton_Click;
         _recordButton.Click += RecordButton_Click;
         _stopButton.Click += StopButton_Click;
         _playButton.Click += PlayButton_Click;
         _reviewButton.Click += ReviewButton_Click;
+        _macroList.SelectedIndexChanged += (_, _) => LoadSelectedMacroSettings();
+        _thresholdInput.ValueChanged += (_, _) => SaveCurrentSettings();
+        _repeatInput.ValueChanged += (_, _) => SaveCurrentSettings();
+        _speedInput.ValueChanged += (_, _) => SaveCurrentSettings();
         Load += (_, _) => RefreshMacroList();
     }
 
@@ -67,9 +89,45 @@ public sealed class MainForm : Form
 
         if (selected != null && _macroList.Items.Contains(selected))
             _macroList.SelectedItem = selected;
+        else
+            LoadSelectedMacroSettings();
     }
 
     private string? SelectedMacroName => _macroList.SelectedItem as string;
+
+    /// <summary>Populates the settings controls from the selected macro's saved values, without triggering a re-save.</summary>
+    private void LoadSelectedMacroSettings()
+    {
+        var macro = SelectedMacroName is { } name ? MacroStorage.LoadMacro(name) : null;
+
+        _loadingSettings = true;
+        try
+        {
+            _thresholdInput.Value = (decimal)Math.Clamp(macro?.SimilarityThreshold ?? 99.0, (double)_thresholdInput.Minimum, (double)_thresholdInput.Maximum);
+            _repeatInput.Value = Math.Clamp(macro?.RepeatCount ?? 1, (int)_repeatInput.Minimum, (int)_repeatInput.Maximum);
+            _speedInput.Value = (decimal)Math.Clamp(macro?.Speed ?? 1.0, (double)_speedInput.Minimum, (double)_speedInput.Maximum);
+        }
+        finally
+        {
+            _loadingSettings = false;
+        }
+    }
+
+    /// <summary>Persists the threshold/repeat/speed controls to the selected macro's actions.json immediately.</summary>
+    private void SaveCurrentSettings()
+    {
+        if (_loadingSettings) return;
+        if (SelectedMacroName is not { } name) return;
+        if (_recorder != null || _isPlaying) return;
+
+        var macro = MacroStorage.LoadMacro(name);
+        if (macro == null) return;
+
+        macro.SimilarityThreshold = (double)_thresholdInput.Value;
+        macro.RepeatCount = (int)_repeatInput.Value;
+        macro.Speed = (double)_speedInput.Value;
+        MacroStorage.SaveMacro(macro);
+    }
 
     private void NewButton_Click(object? sender, EventArgs e)
     {
@@ -88,7 +146,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        var macro = new Macro { Name = name, SimilarityThreshold = (double)_thresholdInput.Value };
+        var macro = new Macro
+        {
+            Name = name,
+            SimilarityThreshold = (double)_thresholdInput.Value,
+            RepeatCount = (int)_repeatInput.Value,
+            Speed = (double)_speedInput.Value
+        };
         MacroStorage.SaveMacro(macro);
         RefreshMacroList();
         _macroList.SelectedItem = name;
@@ -104,6 +168,27 @@ public sealed class MainForm : Form
 
         MacroStorage.DeleteMacro(name);
         RefreshMacroList();
+    }
+
+    private void EditButton_Click(object? sender, EventArgs e)
+    {
+        if (SelectedMacroName is not { } name) return;
+
+        string path = Path.Combine(MacroStorage.GetMacroFolder(name), "actions.json");
+        if (!File.Exists(path))
+        {
+            MessageBox.Show(this, "This macro has no actions.json yet. Record something first.", "Nothing to edit", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not open Notepad: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void RecordButton_Click(object? sender, EventArgs e)
@@ -130,6 +215,8 @@ public sealed class MainForm : Form
 
         var macro = MacroStorage.LoadMacro(_recordingMacroName) ?? new Macro { Name = _recordingMacroName };
         macro.SimilarityThreshold = (double)_thresholdInput.Value;
+        macro.RepeatCount = (int)_repeatInput.Value;
+        macro.Speed = (double)_speedInput.Value;
 
         string imagesFolder = MacroStorage.GetImagesFolder(_recordingMacroName);
         Directory.CreateDirectory(imagesFolder);
@@ -161,9 +248,13 @@ public sealed class MainForm : Form
         _stopButton.Enabled = recording;
         _newButton.Enabled = !recording;
         _deleteButton.Enabled = !recording;
+        _editButton.Enabled = !recording;
         _playButton.Enabled = !recording;
         _reviewButton.Enabled = !recording;
         _macroList.Enabled = !recording;
+        _thresholdInput.Enabled = !recording;
+        _repeatInput.Enabled = !recording;
+        _speedInput.Enabled = !recording;
     }
 
     private void ReviewButton_Click(object? sender, EventArgs e)
@@ -195,9 +286,10 @@ public sealed class MainForm : Form
 
         var player = new MacroPlayer(macro)
         {
-            OnStep = (index, total, action) =>
+            OnStep = (repeatIndex, repeatCount, actionIndex, actionCount, action) =>
             {
-                Invoke(new MethodInvoker(() => _statusLabel.Text = $"Playing '{name}': step {index + 1}/{total} ({action.Type})"));
+                Invoke(new MethodInvoker(() => _statusLabel.Text =
+                    $"Playing '{name}': repeat {repeatIndex + 1}/{repeatCount}, step {actionIndex + 1}/{actionCount} ({action.Type})"));
             },
             OnMismatch = (action, similarity, threshold, reference, current) =>
             {

@@ -23,8 +23,8 @@ internal sealed class MacroPlayer
     /// <summary>Called when a click's similarity is below threshold. Return the user's decision.</summary>
     public Func<ActionRecord, double, double, Bitmap, Bitmap, MismatchDecision>? OnMismatch;
 
-    /// <summary>Called before each action executes, for status/progress display.</summary>
-    public Action<int, int, ActionRecord>? OnStep;
+    /// <summary>Called before each action executes, for status/progress display. Args: repeatIndex, repeatCount, actionIndex, actionCount, action.</summary>
+    public Action<int, int, int, int, ActionRecord>? OnStep;
 
     public bool IsCancelled { get; private set; }
 
@@ -38,28 +38,51 @@ internal sealed class MacroPlayer
     {
         IsCancelled = false;
         var actions = _macro.Actions;
+        int repeatCount = Math.Max(1, _macro.RepeatCount);
 
-        for (int i = 0; i < actions.Count; i++)
+        for (int repeat = 0; repeat < repeatCount; repeat++)
         {
-            var action = actions[i];
-            OnStep?.Invoke(i, actions.Count, action);
-
-            if (action.DelayMs > 0)
-                System.Threading.Thread.Sleep(Math.Min(action.DelayMs, 5000));
-
-            if (action.Type == ActionType.MouseClick)
+            for (int i = 0; i < actions.Count; i++)
             {
-                if (!ExecuteMouseClick(action))
+                var action = actions[i];
+                OnStep?.Invoke(repeat, repeatCount, i, actions.Count, action);
+
+                if (action.Type == ActionType.MouseClick)
                 {
-                    IsCancelled = true;
-                    return;
+                    // Move to the target first so any hover-triggered UI change (e.g. a
+                    // button lighting up) has the chance to happen before we verify and click,
+                    // exactly like it did live when this macro was recorded.
+                    InputSimulator.MoveTo(action.X, action.Y);
+                    Sleep(action.DelayMs);
+
+                    if (!ExecuteMouseClick(action))
+                    {
+                        IsCancelled = true;
+                        return;
+                    }
+                }
+                else
+                {
+                    Sleep(action.DelayMs);
+                    InputSimulator.SendKey(action.KeyCode, action.Type == ActionType.KeyUp);
                 }
             }
-            else
-            {
-                InputSimulator.SendKey(action.KeyCode, action.Type == ActionType.KeyUp);
-            }
         }
+    }
+
+    /// <summary>Sleeps for the recorded delay scaled by the macro's speed setting (0.1x-10x; 10x = no delay).</summary>
+    private void Sleep(int recordedDelayMs)
+    {
+        if (recordedDelayMs <= 0)
+            return;
+
+        double speed = _macro.Speed <= 0 ? 1.0 : _macro.Speed;
+        if (speed >= 10.0)
+            return;
+
+        int scaled = (int)Math.Round(recordedDelayMs / speed);
+        if (scaled > 0)
+            System.Threading.Thread.Sleep(scaled);
     }
 
     private bool ExecuteMouseClick(ActionRecord action)

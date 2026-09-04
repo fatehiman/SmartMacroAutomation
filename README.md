@@ -26,6 +26,21 @@ The goal is to provide the simplicity of traditional macro automation while maki
 
 * **Image comparison:** simple per-pixel RGB difference with a small color tolerance. No external image library is required.
 
+### Per-macro playback settings
+
+Each macro stores three settings in its `actions.json` (editable from the main window, or by hand via **Edit in Notepad**):
+
+* **Similarity threshold** - default 99%, as described above.
+* **Repeat count** - how many times Play runs the whole macro in a row. 1 to 999, default 1.
+* **Speed** - a multiplier applied to every recorded delay, one decimal place, range 0.1 to 10.0:
+  * `1.0` = exactly as recorded (default).
+  * `1.5` = 1.5x faster (a recorded 3s wait becomes 2s).
+  * `10.0` = all delays removed, macro runs as fast as possible.
+
+During recording, the time between every action is captured exactly as it happened - including how long the mouse hovered somewhere before a click, and how long a key was held down or how long the pause was between keystrokes. Speed scales all of that; it does not change *what* was recorded, only *how fast* it is replayed.
+
+Before verifying and clicking, the mouse is moved to the recorded position first and then the (speed-scaled) recorded wait is applied - reproducing any hover state the target UI element had at recording time (e.g. a button that only lights up while the mouse is over it) before the screenshot comparison happens.
+
 ### Building from source
 
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download) on Windows.
@@ -48,7 +63,9 @@ This produces `publish/SmartMacroAutomation.exe`, a single file that runs on Win
 2. Select it in the list and click **Start Recording**. Perform your mouse clicks and keyboard actions in any application.
 3. Click **Stop Recording** (in the SmartMacroAutomation window) to save the macro.
 4. Optionally click **Review Screenshots** to inspect or crop the reference image captured for each click.
-5. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue.
+5. Adjust **Similarity threshold**, **Repeat count**, and **Speed** for the selected macro as needed - changes save immediately.
+6. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue.
+7. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
 
 Note: because start/stop/play are controlled from the app window (no global hotkeys), clicks on the SmartMacroAutomation window itself are automatically ignored while recording.
 
@@ -373,6 +390,10 @@ or, where appropriate, a sequence of text input may be represented as a text-ent
 * Preservation of action order and timing
 * Macro save and load functionality
 * Ability to inspect recorded actions and their reference images
+* Configurable repeat count (run a macro multiple times in a row)
+* Configurable playback speed, scaling all recorded delays (0.1x-10x)
+* Mouse moved to the recorded position before verification, so hover-triggered UI changes are reproduced
+* Direct macro editing via Notepad
 
 ---
 
