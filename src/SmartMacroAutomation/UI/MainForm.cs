@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing.Imaging;
 using SmartMacroAutomation.Models;
+using SmartMacroAutomation.Native;
 using SmartMacroAutomation.Playback;
 using SmartMacroAutomation.Recording;
 using SmartMacroAutomation.Storage;
@@ -17,6 +18,10 @@ public sealed class MainForm : Form
     private readonly Button _stopButton = new() { Text = "Stop Recording", Dock = DockStyle.Top, Height = 40, Enabled = false };
     private readonly Button _playButton = new() { Text = "Play Macro", Dock = DockStyle.Top, Height = 40 };
     private readonly Button _reviewButton = new() { Text = "Review Screenshots", Dock = DockStyle.Top, Height = 32 };
+
+    // Playback-only, not persisted to the macro's actions.json: clamps recorded delays over
+    // 500ms down to 500ms in memory while playing, without touching the saved macro.
+    private readonly CheckBox _removeDelaysCheckbox = new() { Text = "Remove all delays (>500ms)", Dock = DockStyle.Top, Height = 24 };
 
     private readonly NumericUpDown _thresholdInput = new() { Minimum = 50, Maximum = 100, DecimalPlaces = 1, Increment = 0.5m, Value = 99, Dock = DockStyle.Top };
     private readonly Label _thresholdLabel = new() { Text = "Similarity threshold (%):", Dock = DockStyle.Top, Height = 20 };
@@ -36,6 +41,7 @@ public sealed class MainForm : Form
     private string? _recordingMacroName;
     private bool _isPlaying;
     private bool _loadingSettings;
+    private GlobalHook? _playbackEscHook;
 
     public MainForm()
     {
@@ -49,6 +55,7 @@ public sealed class MainForm : Form
         leftPanel.Controls.Add(_editButton);
         leftPanel.Controls.Add(_reviewButton);
         leftPanel.Controls.Add(_playButton);
+        leftPanel.Controls.Add(_removeDelaysCheckbox);
         leftPanel.Controls.Add(_mouseSpeedInput);
         leftPanel.Controls.Add(_mouseSpeedLabel);
         leftPanel.Controls.Add(_speedInput);
@@ -265,6 +272,7 @@ public sealed class MainForm : Form
         _thresholdInput.Enabled = !recording;
         _repeatInput.Enabled = !recording;
         _speedInput.Enabled = !recording;
+        _removeDelaysCheckbox.Enabled = !recording;
     }
 
     private void ReviewButton_Click(object? sender, EventArgs e)
@@ -292,10 +300,12 @@ public sealed class MainForm : Form
         _isPlaying = true;
         _playButton.Enabled = false;
         _recordButton.Enabled = false;
+        _removeDelaysCheckbox.Enabled = false;
         _statusLabel.Text = $"Playing '{name}'...";
 
         var player = new MacroPlayer(macro)
         {
+            RemoveAllDelays = _removeDelaysCheckbox.Checked,
             OnStep = (repeatIndex, repeatCount, actionIndex, actionCount, action) =>
             {
                 Invoke(new MethodInvoker(() => _statusLabel.Text =
@@ -309,8 +319,28 @@ public sealed class MainForm : Form
                     form.ShowDialog(this);
                     return form.Decision;
                 }))!;
+            },
+            OnEscRequested = () =>
+            {
+                return (MismatchDecision)Invoke(new Func<MismatchDecision>(() =>
+                {
+                    using var form = new PlaybackPausedForm();
+                    form.ShowDialog(this);
+                    return form.Decision;
+                }))!;
             }
         };
+
+        // Global low-level keyboard hook so Esc stops playback even when a different
+        // application has focus (playback moves focus/input to arbitrary target windows).
+        var escHook = new GlobalHook { IgnoreOwnProcessClicks = false };
+        escHook.KeyEvent += (_, args) =>
+        {
+            if (!args.IsKeyUp && args.VkCode == (int)Keys.Escape)
+                player.RequestStop();
+        };
+        escHook.Start();
+        _playbackEscHook = escHook;
 
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -326,9 +356,12 @@ public sealed class MainForm : Form
             {
                 Invoke(new MethodInvoker(() =>
                 {
+                    _playbackEscHook?.Dispose();
+                    _playbackEscHook = null;
                     _isPlaying = false;
                     _playButton.Enabled = true;
                     _recordButton.Enabled = true;
+                    _removeDelaysCheckbox.Enabled = true;
                     _statusLabel.Text = player.IsCancelled ? $"Playback of '{name}' stopped by user." : $"Playback of '{name}' finished.";
                 }));
             }

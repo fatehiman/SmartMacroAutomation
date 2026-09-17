@@ -41,6 +41,14 @@ Each macro stores four settings in its `actions.json` (editable from the main wi
 
 During recording, the time between every action is captured exactly as it happened - including how long the mouse hovered somewhere before a click, and how long a key was held down or how long the pause was between keystrokes. Speed scales all of that; it does not change *what* was recorded, only *how fast* it is replayed.
 
+### Remove all delays (playback-only)
+
+A **Remove all delays** checkbox sits above the **Play Macro** button. When checked, any recorded delay longer than 500ms is capped at 500ms for that playback run only - short delays (like the ~50ms between a key-down and key-up) are left untouched. This is applied in memory while playing; the macro's saved `actions.json` is never modified. Uncheck it and delays go back to their recorded values.
+
+### Stopping playback with Esc
+
+Pressing **Esc** at any point during playback stops the macro immediately - even if the currently focused window belongs to a different application - and shows a dialog asking whether to **Continue** or **Stop**. Choosing Continue resumes the macro exactly where it left off; choosing Stop ends playback for good, the same as when a visual verification mismatch is not confirmed.
+
 Before verifying and clicking, the mouse is moved to the recorded position first and then the (speed-scaled) recorded wait is applied - reproducing any hover state the target UI element had at recording time (e.g. a button that only lights up while the mouse is over it) before the screenshot comparison happens.
 
 ### Human-like mouse movement
@@ -83,8 +91,9 @@ This produces `publish/SmartMacroAutomation.exe`, a single file that runs on Win
 3. Click **Stop Recording** (in the SmartMacroAutomation window) to save the macro.
 4. Optionally click **Review Screenshots** to inspect or crop the reference image captured for each click.
 5. Adjust **Similarity threshold**, **Repeat count**, **Speed**, and **Mouse move speed** for the selected macro as needed - changes save immediately.
-6. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue.
-7. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
+6. Optionally check **Remove all delays** to cap every recorded delay over 500ms down to 500ms for the next playback run only (short delays such as key-down/key-up are left alone). This is not saved with the macro.
+7. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue. Press **Esc** at any time to stop playback immediately and choose whether to continue or stop for good.
+8. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
 
 Note: because start/stop/play are controlled from the app window (no global hotkeys), clicks on the SmartMacroAutomation window itself are automatically ignored while recording.
 
@@ -415,6 +424,8 @@ or, where appropriate, a sequence of text input may be represented as a text-ent
 * Human-like cursor movement: straight-line glide with ease-in-out speed instead of an instant jump
 * Configurable mouse move speed in pixels per second (0 = instant jump)
 * Direct macro editing via Notepad
+* "Remove all delays" playback option: caps recorded delays over 500ms to 500ms in memory only, without touching short delays or the saved macro
+* Esc stops playback immediately from anywhere, with a Continue/Stop confirmation
 
 ---
 
