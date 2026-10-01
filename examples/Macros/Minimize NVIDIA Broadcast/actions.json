@@ -1,0 +1,30 @@
+{
+  "Name": "Minimize NVIDIA Broadcast",
+  "SimilarityThreshold": 99,
+  "RepeatCount": 1,
+  "Speed": 1,
+  "MouseMoveSpeed": 1600,
+  "Actions": [
+    {
+      "Type": "FindWindow",
+      "WindowTitle": "NVIDIA Broadcast",
+      "ProcessName": "NVIDIA Broadcast",
+      "TimeoutMs": 3000,
+      "DelayMs": 0
+    },
+    {
+      "Type": "WindowClick",
+      "X": 62,
+      "Y": 15,
+      "Anchor": "TopRight",
+      "ClickMode": "Background",
+      "Button": "Left",
+      "ImageFile": "window_0001.png",
+      "RefOffsetX": -5,
+      "RefOffsetY": 0,
+      "RefWidth": 10,
+      "RefHeight": 2,
+      "DelayMs": 300
+    }
+  ]
+}
