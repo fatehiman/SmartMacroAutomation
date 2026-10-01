@@ -27,6 +27,9 @@ public sealed class MainForm : Form
     // 500ms down to 500ms in memory while playing, without touching the saved macro.
     private readonly CheckBox _removeDelaysCheckbox = new() { Text = "Remove all delays (>500ms)", Dock = DockStyle.Top, Height = 24 };
 
+    // Saved in the Windows Run registry key, not in actions.json: plays the macro with --play at logon.
+    private readonly CheckBox _startupCheckbox = new() { Text = "Run this macro at Windows startup", Dock = DockStyle.Top, Height = 24 };
+
     private readonly NumericUpDown _thresholdInput = new() { Minimum = 50, Maximum = 100, DecimalPlaces = 1, Increment = 0.5m, Value = 99, Dock = DockStyle.Top };
     private readonly Label _thresholdLabel = new() { Text = "Similarity threshold (%):", Dock = DockStyle.Top, Height = 20 };
 
@@ -55,6 +58,7 @@ public sealed class MainForm : Form
 
         var leftPanel = new Panel { Dock = DockStyle.Left, Width = 240, Padding = new Padding(8), AutoScroll = true };
         // Added in reverse order because Dock = Top stacks each new control above the previous one.
+        leftPanel.Controls.Add(_startupCheckbox);
         leftPanel.Controls.Add(_windowToolButton);
         leftPanel.Controls.Add(_editButton);
         leftPanel.Controls.Add(_reviewButton);
@@ -97,6 +101,7 @@ public sealed class MainForm : Form
         _repeatInput.ValueChanged += (_, _) => SaveCurrentSettings();
         _speedInput.ValueChanged += (_, _) => SaveCurrentSettings();
         _mouseSpeedInput.ValueChanged += (_, _) => SaveCurrentSettings();
+        _startupCheckbox.CheckedChanged += (_, _) => StartupCheckbox_Changed();
         Load += (_, _) => RefreshMacroList();
     }
 
@@ -127,6 +132,8 @@ public sealed class MainForm : Form
             _repeatInput.Value = Math.Clamp(macro?.RepeatCount ?? 1, (int)_repeatInput.Minimum, (int)_repeatInput.Maximum);
             _speedInput.Value = (decimal)Math.Clamp(macro?.Speed ?? 1.0, (double)_speedInput.Minimum, (double)_speedInput.Maximum);
             _mouseSpeedInput.Value = (decimal)Math.Clamp(macro?.MouseMoveSpeed ?? 1600.0, (double)_mouseSpeedInput.Minimum, (double)_mouseSpeedInput.Maximum);
+            _startupCheckbox.Checked = macro != null && StartupRegistration.IsEnabled(macro.Name);
+            _startupCheckbox.Enabled = macro != null && _recorder == null;
         }
         finally
         {
@@ -149,6 +156,31 @@ public sealed class MainForm : Form
         macro.Speed = (double)_speedInput.Value;
         macro.MouseMoveSpeed = (double)_mouseSpeedInput.Value;
         MacroStorage.SaveMacro(macro);
+    }
+
+    /// <summary>Adds or removes the selected macro from the Windows Run key, so it plays (with --play) at logon.</summary>
+    private void StartupCheckbox_Changed()
+    {
+        if (_loadingSettings) return;
+        if (SelectedMacroName is not { } name) return;
+
+        try
+        {
+            if (_startupCheckbox.Checked)
+            {
+                StartupRegistration.Enable(name);
+                AppendLog($"'{name}' will run at Windows startup: {StartupRegistration.CommandFor(name)}");
+            }
+            else
+            {
+                StartupRegistration.Disable(name);
+                AppendLog($"'{name}' will no longer run at Windows startup.");
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not change the startup setting: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void NewButton_Click(object? sender, EventArgs e)
@@ -189,6 +221,7 @@ public sealed class MainForm : Form
             "Confirm delete", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (result != DialogResult.Yes) return;
 
+        StartupRegistration.Disable(name);
         MacroStorage.DeleteMacro(name);
         RefreshMacroList();
     }
@@ -281,6 +314,7 @@ public sealed class MainForm : Form
         _repeatInput.Enabled = !recording;
         _speedInput.Enabled = !recording;
         _removeDelaysCheckbox.Enabled = !recording;
+        _startupCheckbox.Enabled = !recording && SelectedMacroName != null;
     }
 
     private void ReviewButton_Click(object? sender, EventArgs e)

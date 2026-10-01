@@ -1,5 +1,5 @@
 {
-  "Name": "Minimize NVIDIA Broadcast",
+  "Name": "Close NVIDIA Broadcast to tray",
   "SimilarityThreshold": 99,
   "RepeatCount": 1,
   "Speed": 1,
@@ -9,22 +9,25 @@
       "Type": "FindWindow",
       "WindowTitle": "NVIDIA Broadcast",
       "ProcessName": "NVIDIA Broadcast",
-      "TimeoutMs": 3000,
+      "TimeoutMs": 300000,
+      "IfNotFound": "Stop",
       "DelayMs": 0
     },
     {
       "Type": "WindowClick",
-      "X": 62,
+      "X": 21,
       "Y": 15,
       "Anchor": "TopRight",
       "ClickMode": "Background",
       "Button": "Left",
       "ImageFile": "window_0001.png",
-      "RefOffsetX": -5,
+      "RefOffsetX": -1,
       "RefOffsetY": 0,
-      "RefWidth": 10,
+      "RefWidth": 2,
       "RefHeight": 2,
-      "DelayMs": 300
+      "WaitForMatchMs": 60000,
+      "RepeatUntilHiddenMs": 30000,
+      "DelayMs": 1000
     }
   ]
 }

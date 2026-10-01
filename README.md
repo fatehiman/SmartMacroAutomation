@@ -85,15 +85,14 @@ Found window 'NVIDIA Broadcast' (NVIDIA Broadcast): x=530 y=25 w=540px h=802px, 
 * `x`/`y` are in virtual-screen pixels (all monitors form one coordinate space), so they are enough to locate the window on any monitor.
 * The monitor number is the `n` of Windows' `\\.\DISPLAYn` device name. If the window overlaps more than one monitor, the log says `spans monitors 1, 2` instead.
 * The size is the visible frame. The invisible resize border that Windows 10/11 adds is not counted.
-* A minimized window is found too, and the log says `is minimized`.
+* A minimized window is found too, and the log says `is minimized`. A hidden window (for example an app that sits in the system tray) is not found.
 
 | Field | Meaning |
 | --- | --- |
 | `WindowTitle` | Text the title must contain (case-insensitive). An exact title match wins over a partial one; otherwise the topmost matching window wins. |
 | `ProcessName` | Optional. Process name without `.exe`, e.g. `NVIDIA Broadcast`. |
-| `TimeoutMs` | How long to keep looking before giving up. Default 3000. |
-
-If no window is found in time, playback pauses and asks: **Continue** skips the window clicks that need it, **Stop** ends playback.
+| `TimeoutMs` | How long to keep looking before giving up. Default 3000. Use a large value (e.g. 300000 = 5 minutes) to wait for an app that is still starting. |
+| `IfNotFound` | What to do if no window is found in time: `Ask` (default) pauses and asks - **Continue** skips the window clicks that need it, **Stop** ends playback. `Continue` goes on without asking. `Stop` ends playback quietly, without a dialog (good for unattended runs at Windows startup). |
 
 **`WindowClick`** clicks a point inside the window found by the last `FindWindow`. The window position is read again just before the click, so it still works if the window moved.
 
@@ -104,11 +103,13 @@ If no window is found in time, playback pauses and asks: **Continue** skips the 
 | `ClickMode` | `Background` (default) or `Foreground`, see below. |
 | `Button` | `Left` (default), `Right`, `Middle`. |
 | `ImageFile`, `RefOffsetX/Y`, `RefWidth/Height` | Optional reference image, relative to the click point, like a normal click. |
+| `WaitForMatchMs` | If the reference image does not match yet, keep checking (every 250ms) for up to this many ms before showing the mismatch dialog. Useful while an app is still drawing its window. Default 0 (check once). |
+| `RepeatUntilHiddenMs` | For close / minimize / "to tray" buttons: after the click, check that the window really went away (hidden, minimized or closed). If it is still visible after 2 seconds, click again, for up to this many ms in total. An app that is still starting can drop the first click. Default 0 (click once). |
 | `DelayMs` | Wait before the action, like any other action. |
 
 Click modes:
 
-* **Background** - sends mouse messages (`WM_MOUSEMOVE`, then button down/up) straight to the window with `PostMessage`. The real cursor does not move, focus does not change, and **it works even when another window covers the target**. A few hover moves are sent first, because Chromium/Electron apps ignore a press without hover. If the window is minimized, the click is skipped (and logged), because there is nothing on screen to click.
+* **Background** - sends mouse messages (`WM_MOUSEMOVE`, then button down/up) straight to the window with `PostMessage`. The real cursor does not move, focus does not change, and **it works even when another window covers the target**. A few hover moves are sent first, because Chromium/Electron apps ignore a press without hover. If the window is minimized or hidden, the click is skipped (and logged), because there is nothing on screen to click.
 * **Foreground** - restores the window if needed, brings it to the front, glides the real cursor there (Mouse move speed setting) and clicks with `SendInput`. Use it for apps that ignore posted messages.
 
 Visual verification for window clicks uses `PrintWindow`: it compares the reference image with what the *window itself* draws, not with the screen. So a window lying on top does not cause a false mismatch. The macro's similarity threshold (or the action's own `Threshold`) applies, and a mismatch shows the same Continue / Stop dialog.
@@ -126,29 +127,49 @@ The **Window Tool (find / click)** button opens a helper dialog:
 3. Pick **Mode** and **Button**, then **Test Click** to try it on the real window.
 4. **Add to Selected Macro** appends a `FindWindow` (skipped if the macro already looks for this window last) and a `WindowClick` with a 24x24 reference image to the macro selected in the main window.
 
-### Example macro: minimize NVIDIA Broadcast
+### Example macro: close NVIDIA Broadcast to the tray
 
-NVIDIA Broadcast is an Electron app with a custom title bar, so the normal Windows ways to minimize it do not work. `examples/Macros/Minimize NVIDIA Broadcast/` minimizes it by clicking its own minimize button in the background:
+NVIDIA Broadcast is an Electron app with a custom title bar, so the normal Windows commands do not work on it. Its own close button (X) does not quit the app: it hides the window to the system tray, and the app keeps running. `examples/Macros/Close NVIDIA Broadcast to tray/` clicks that button in the background:
 
 ```json
 "Actions": [
-  { "Type": "FindWindow", "WindowTitle": "NVIDIA Broadcast", "ProcessName": "NVIDIA Broadcast", "TimeoutMs": 3000 },
-  { "Type": "WindowClick", "X": 62, "Y": 15, "Anchor": "TopRight", "ClickMode": "Background", "Button": "Left",
-    "ImageFile": "window_0001.png", "RefOffsetX": -5, "RefOffsetY": 0, "RefWidth": 10, "RefHeight": 2, "DelayMs": 300 }
+  { "Type": "FindWindow", "WindowTitle": "NVIDIA Broadcast", "ProcessName": "NVIDIA Broadcast",
+    "TimeoutMs": 300000, "IfNotFound": "Stop" },
+  { "Type": "WindowClick", "X": 21, "Y": 15, "Anchor": "TopRight", "ClickMode": "Background", "Button": "Left",
+    "ImageFile": "window_0001.png", "RefOffsetX": -1, "RefOffsetY": 0, "RefWidth": 2, "RefHeight": 2,
+    "WaitForMatchMs": 60000, "RepeatUntilHiddenMs": 30000, "DelayMs": 1000 }
 ]
 ```
 
-The reference image is only the 10x2 px dash of the minimize icon, so it matches whether or not the button is drawn in its hover state. If Broadcast is already minimized, the click is skipped. Tested with the window covered by Chrome: found, verified at 100%, minimized.
+* It waits up to 5 minutes for the Broadcast window to appear. If it never appears (for example, Broadcast already started in the tray), the macro ends quietly.
+* The click point is 21px from the right edge and 15px from the top: the middle of the X.
+* The reference image is only the 2x2 px bright center of the X. These pixels do not mix with the button background, so they match even if the button is drawn in a hover color.
+* It waits up to 60 seconds for the X to be drawn, and clicks again (for up to 30 seconds) if the window does not go away.
 
-To use it, copy the folder into the `Macros` folder next to `SmartMacroAutomation.exe`. Because of the `TopRight` anchor, the button is still found when the window is resized, as long as the title bar layout stays the same. If it does not (for example with display scaling other than 100%), recreate the click with the Window Tool.
+Tested at 100% display scaling, with the window covered by Chrome: found, verified at 100%, window hidden, all Broadcast processes still running.
+
+To use it, copy the folder into the `Macros` folder next to `SmartMacroAutomation.exe`. If your title bar layout is different (for example with display scaling other than 100%), recreate the click with the Window Tool.
 
 ### Playing a macro from the command line
 
 ```powershell
-SmartMacroAutomation.exe --play "Minimize NVIDIA Broadcast" [--remove-delays]
+SmartMacroAutomation.exe --play "Close NVIDIA Broadcast to tray" [--remove-delays]
 ```
 
 This plays one macro without opening the main window, for example from a desktop shortcut or Task Scheduler. Esc and the Continue / Stop dialogs work as usual. The log is saved to `Macros\<name>\last-run.log`. Exit code: `0` = finished, `1` = stopped or error, `2` = macro not found.
+
+### Running a macro at Windows startup
+
+Select a macro and check **Run this macro at Windows startup**, or use the command line:
+
+```powershell
+SmartMacroAutomation.exe --startup-add "Close NVIDIA Broadcast to tray"
+SmartMacroAutomation.exe --startup-remove "Close NVIDIA Broadcast to tray"
+```
+
+This adds (or removes) a value named `SmartMacroAutomation: <macro name>` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. No admin rights are needed. At logon, Windows runs `"<path to this exe>" --play "<macro name>"`. The path is the exe that made the entry, so the macro must be in the `Macros` folder next to that exe. If you move the exe, register again. Deleting a macro also removes its startup entry.
+
+To run a macro *after another app has started* (like NVIDIA Broadcast), begin it with a `FindWindow` that has a long `TimeoutMs`, as in the example above: the macro starts at logon and waits until the app's window appears.
 
 ### Building from source
 
@@ -514,6 +535,8 @@ or, where appropriate, a sequence of text input may be represented as a text-ent
 * Window click verification against the window's own rendering (`PrintWindow`), not the screen
 * Window Tool: inspect a window, pick a point on its picture, test-click it, add it to a macro
 * `--play` command line to run a macro without the main window
+* Run a macro at Windows startup (checkbox or `--startup-add` / `--startup-remove`)
+* Window clicks can wait for the expected picture (`WaitForMatchMs`) and repeat until the window is hidden (`RepeatUntilHiddenMs`)
 
 ---
 
@@ -558,8 +581,8 @@ Potential future capabilities include:
 * Recording window actions directly instead of adding them with the Window Tool
 * Multi-monitor support
 * Different verification thresholds per action
-* Automatic retry when a target is temporarily unavailable
-* Timeout-based waiting for a visual state to appear
+* Automatic retry when a target is temporarily unavailable (window clicks already have `RepeatUntilHiddenMs`)
+* Timeout-based waiting for a visual state to appear, for recorded clicks (window clicks already have `WaitForMatchMs`)
 * Multiple reference images for a single action
 * AI-based UI element recognition
 

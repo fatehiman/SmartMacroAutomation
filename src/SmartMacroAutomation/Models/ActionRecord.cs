@@ -22,6 +22,19 @@ public enum WindowAnchor
     BottomRight
 }
 
+/// <summary>What a FindWindow does when no window appears within its timeout.</summary>
+public enum WindowNotFoundAction
+{
+    /// <summary>Pause and ask the user whether to continue (default).</summary>
+    Ask,
+
+    /// <summary>Go on without asking; the window clicks that need the window are skipped.</summary>
+    Continue,
+
+    /// <summary>End playback quietly, without asking. Useful for unattended runs, e.g. at Windows startup.</summary>
+    Stop
+}
+
 public enum WindowClickMode
 {
     /// <summary>
@@ -83,6 +96,23 @@ public class ActionRecord
 
     /// <summary>FindWindow: how long to keep looking for the window before giving up. Default 3000ms.</summary>
     public int? TimeoutMs { get; set; }
+
+    /// <summary>FindWindow: what to do if no window is found in time. Default Ask.</summary>
+    public WindowNotFoundAction? IfNotFound { get; set; }
+
+    /// <summary>
+    /// WindowClick: if the reference image does not match yet, keep checking for up to this many
+    /// milliseconds before treating it as a mismatch - e.g. while an app is still drawing its window
+    /// after startup. Default 0 (check once).
+    /// </summary>
+    public int? WaitForMatchMs { get; set; }
+
+    /// <summary>
+    /// WindowClick, for close / minimize / "to tray" buttons: after the click, check that the window went away
+    /// (hidden, minimized or closed). If it is still visible after 2 seconds, click again - for up to this many
+    /// milliseconds in total. Default 0 (click once, do not check).
+    /// </summary>
+    public int? RepeatUntilHiddenMs { get; set; }
 
     /// <summary>
     /// WindowClick: corner the X/Y offset is measured from. X/Y are distances inward from that corner,

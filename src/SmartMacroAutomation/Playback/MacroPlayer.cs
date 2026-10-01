@@ -43,6 +43,8 @@ internal sealed class MacroPlayer
 
     private const int DefaultFindTimeoutMs = 3000;
     private const int FindPollMs = 200;
+    private const int MatchPollMs = 250;
+    private const int RepeatCheckMs = 2000;
 
     public bool IsCancelled { get; private set; }
 
@@ -227,6 +229,16 @@ internal sealed class MacroPlayer
         }
 
         Log($"No window found with {what} (waited {timeoutMs}ms).");
+        switch (action.IfNotFound ?? WindowNotFoundAction.Ask)
+        {
+            case WindowNotFoundAction.Continue:
+                Log("Continuing; window clicks are skipped until the next FindWindow finds a window.");
+                return true;
+            case WindowNotFoundAction.Stop:
+                Log("Stopping playback (IfNotFound = Stop).");
+                return false;
+        }
+
         var decision = OnWindowNotFound?.Invoke(action) ?? MismatchDecision.Stop;
         if (decision == MismatchDecision.Continue)
             Log("Continuing; window clicks are skipped until the next FindWindow finds a window.");
@@ -242,57 +254,152 @@ internal sealed class MacroPlayer
             return true;
         }
 
-        var window = WindowFinder.Refresh(LastWindow.Handle);
-        if (window == null)
-        {
-            Log("Window click skipped: the window was closed.");
-            return true;
-        }
-
         var mode = action.ClickMode ?? WindowClickMode.Background;
-        if (window.IsMinimized)
+        int waitMs = Math.Max(0, action.WaitForMatchMs ?? 0);
+        var clock = Stopwatch.StartNew();
+        bool waitLogged = false;
+
+        // Re-read the window every round: while an app is still starting up, its window may still
+        // move, resize or finish drawing, so the point and the image check are worked out again each time.
+        while (true)
         {
-            if (mode == WindowClickMode.Background)
+            var window = WindowFinder.Refresh(LastWindow.Handle);
+            if (window == null)
             {
-                Log($"Window click skipped: '{window.Title}' is minimized.");
+                Log("Window click skipped: the window was closed.");
                 return true;
             }
 
-            NativeMethods.ShowWindow(window.Handle, NativeMethods.SW_RESTORE);
-            SleepInterruptible(300);
-            window = WindowFinder.Refresh(window.Handle);
-            if (window == null || window.IsMinimized)
+            if (window.IsMinimized)
             {
-                Log("Window click skipped: the window could not be restored.");
+                if (mode == WindowClickMode.Background)
+                {
+                    Log($"Window click skipped: '{window.Title}' is minimized.");
+                    return true;
+                }
+
+                NativeMethods.ShowWindow(window.Handle, NativeMethods.SW_RESTORE);
+                SleepInterruptible(300);
+                window = WindowFinder.Refresh(window.Handle);
+                if (window == null || window.IsMinimized)
+                {
+                    Log("Window click skipped: the window could not be restored.");
+                    return true;
+                }
+            }
+
+            if (!NativeMethods.IsWindowVisible(window.Handle))
+            {
+                Log($"Window click skipped: '{window.Title}' is hidden (e.g. sent to the tray).");
                 return true;
             }
+            LastWindow = window;
+
+            var anchor = action.Anchor ?? WindowAnchor.TopLeft;
+            var windowPoint = WindowInput.ToWindowPoint(window.Bounds.Size, anchor, action.X, action.Y);
+            var screenPoint = new Point(window.Bounds.X + windowPoint.X, window.Bounds.Y + windowPoint.Y);
+
+            bool timedOut = clock.ElapsedMilliseconds >= waitMs;
+            var verdict = VerifyWindowClick(action, window, windowPoint, askOnMismatch: timedOut, logResult: timedOut || !waitLogged);
+            if (verdict == Verification.Stop)
+                return false;
+
+            if (verdict == Verification.Click)
+            {
+                Log($"Clicking '{window.Title}' at window ({windowPoint.X},{windowPoint.Y}) = screen ({screenPoint.X},{screenPoint.Y}), {mode} mode.");
+                ClickWindow(window, screenPoint, action.Button, mode);
+                return RepeatUntilHidden(action, window, mode);
+            }
+
+            // Not matching yet: keep waiting (up to WaitForMatchMs) for the expected picture to appear.
+            if (!waitLogged)
+            {
+                Log($"Waiting up to {waitMs}ms for the window to show the expected picture...");
+                waitLogged = true;
+            }
+            SleepInterruptible(MatchPollMs);
+            if (HandleStopRequestIfAny())
+                return false;
         }
-        LastWindow = window;
+    }
 
-        var anchor = action.Anchor ?? WindowAnchor.TopLeft;
-        var windowPoint = WindowInput.ToWindowPoint(window.Bounds.Size, anchor, action.X, action.Y);
-        var screenPoint = new Point(window.Bounds.X + windowPoint.X, window.Bounds.Y + windowPoint.Y);
-
-        if (!VerifyWindowClick(action, window, windowPoint))
-            return false;
-
-        Log($"Clicking '{window.Title}' at window ({windowPoint.X},{windowPoint.Y}) = screen ({screenPoint.X},{screenPoint.Y}), {mode} mode.");
+    private void ClickWindow(WindowInfo window, Point screenPoint, MouseButtonKind button, WindowClickMode mode)
+    {
         if (mode == WindowClickMode.Foreground)
-            WindowInput.ForegroundClick(window.Handle, screenPoint, action.Button, EffectiveMouseMoveSpeed());
+            WindowInput.ForegroundClick(window.Handle, screenPoint, button, EffectiveMouseMoveSpeed());
         else
-            WindowInput.BackgroundClick(window.Handle, screenPoint, action.Button);
-        return true;
+            WindowInput.BackgroundClick(window.Handle, screenPoint, button);
+    }
+
+    /// <summary>
+    /// For close / minimize / "to tray" buttons: if <see cref="ActionRecord.RepeatUntilHiddenMs"/> is set, checks that the
+    /// window really went away (hidden, minimized or closed) and clicks again if it did not - an app that is still
+    /// starting up can drop the first click. Returns false only if the user stopped playback with Esc.
+    /// </summary>
+    private bool RepeatUntilHidden(ActionRecord action, WindowInfo window, WindowClickMode mode)
+    {
+        int repeatMs = Math.Max(0, action.RepeatUntilHiddenMs ?? 0);
+        if (repeatMs == 0)
+            return true;
+
+        var total = Stopwatch.StartNew();
+        for (int attempt = 2; ; attempt++)
+        {
+            if (WaitUntilHidden(window.Handle, RepeatCheckMs))
+            {
+                Log($"'{window.Title}' is hidden / minimized now.");
+                return true;
+            }
+            if (HandleStopRequestIfAny())
+                return false;
+            if (total.ElapsedMilliseconds >= repeatMs)
+            {
+                Log($"'{window.Title}' is still visible after {repeatMs}ms; giving up.");
+                return true;
+            }
+
+            var current = WindowFinder.Refresh(window.Handle);
+            if (current == null)
+                return true;
+
+            var windowPoint = WindowInput.ToWindowPoint(current.Bounds.Size, action.Anchor ?? WindowAnchor.TopLeft, action.X, action.Y);
+            var screenPoint = new Point(current.Bounds.X + windowPoint.X, current.Bounds.Y + windowPoint.Y);
+            Log($"'{current.Title}' is still visible; clicking again (attempt {attempt}).");
+            ClickWindow(current, screenPoint, action.Button, mode);
+        }
+    }
+
+    /// <summary>Polls until the window is hidden, minimized or closed, for up to <paramref name="ms"/>.</summary>
+    private bool WaitUntilHidden(nint hWnd, int ms)
+    {
+        var clock = Stopwatch.StartNew();
+        while (true)
+        {
+            if (!NativeMethods.IsWindow(hWnd) || !NativeMethods.IsWindowVisible(hWnd) || NativeMethods.IsIconic(hWnd))
+                return true;
+            if (clock.ElapsedMilliseconds >= ms || _stopRequested)
+                return false;
+            SleepInterruptible(100);
+        }
+    }
+
+    private enum Verification
+    {
+        Click,
+        NotYet,
+        Stop
     }
 
     /// <summary>
     /// Compares the window's own rendering (PrintWindow, so covering windows do not matter) with the
-    /// action's reference image. Returns true when the click may go ahead.
+    /// action's reference image. On a mismatch it asks the user only when <paramref name="askOnMismatch"/>
+    /// is set (i.e. the wait time is over); otherwise it returns NotYet so the caller can try again.
     /// </summary>
-    private bool VerifyWindowClick(ActionRecord action, WindowInfo window, Point windowPoint)
+    private Verification VerifyWindowClick(ActionRecord action, WindowInfo window, Point windowPoint, bool askOnMismatch, bool logResult)
     {
         string refPath = Path.Combine(_macroFolder, "images", action.ImageFile ?? "");
         if (action.ImageFile == null || !File.Exists(refPath))
-            return true; // no reference image: click without verification
+            return Verification.Click; // no reference image: click without verification
 
         var area = new Rectangle(windowPoint.X + action.RefOffsetX, windowPoint.Y + action.RefOffsetY, action.RefWidth, action.RefHeight);
         using var whole = WindowCapture.Capture(window.Handle);
@@ -303,12 +410,16 @@ internal sealed class MacroPlayer
         using var reference = new Bitmap(refPath);
         double threshold = action.Threshold > 0 ? action.Threshold : _macro.SimilarityThreshold;
         double similarity = ImageComparer.CalculateSimilarity(reference, current);
-        Log($"Window click verification: similarity {similarity:0.0}% (required {threshold:0.0}%).");
+        if (logResult || similarity >= threshold)
+            Log($"Window click verification: similarity {similarity:0.0}% (required {threshold:0.0}%).");
 
         if (similarity >= threshold)
-            return true;
+            return Verification.Click;
+        if (!askOnMismatch)
+            return Verification.NotYet;
 
-        return (OnMismatch?.Invoke(action, similarity, threshold, reference, current) ?? MismatchDecision.Stop) == MismatchDecision.Continue;
+        var decision = OnMismatch?.Invoke(action, similarity, threshold, reference, current) ?? MismatchDecision.Stop;
+        return decision == MismatchDecision.Continue ? Verification.Click : Verification.Stop;
     }
 
     private bool ExecuteMouseClick(ActionRecord action)
