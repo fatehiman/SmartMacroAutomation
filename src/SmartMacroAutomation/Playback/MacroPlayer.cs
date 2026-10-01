@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using SmartMacroAutomation.Models;
 using SmartMacroAutomation.Native;
@@ -14,6 +15,8 @@ internal enum MismatchDecision
 /// <summary>
 /// Replays a macro. Every mouse click is preceded by a visual verification
 /// against its reference screenshot; keyboard actions are replayed as-is.
+/// FindWindow / WindowClick actions target a window found by title, so they keep
+/// working when that window moves, and (in Background mode) even when it is covered.
 /// </summary>
 internal sealed class MacroPlayer
 {
@@ -28,6 +31,18 @@ internal sealed class MacroPlayer
 
     /// <summary>Called when the user presses Esc during playback. Return whether to continue or stop.</summary>
     public Func<MismatchDecision>? OnEscRequested;
+
+    /// <summary>Called when a FindWindow action finds no window within its timeout. Continue = skip the window clicks that depend on it.</summary>
+    public Func<ActionRecord, MismatchDecision>? OnWindowNotFound;
+
+    /// <summary>Called with human readable progress lines, e.g. the position and size of a found window.</summary>
+    public Action<string>? OnLog;
+
+    /// <summary>The window found by the most recent FindWindow action, if any.</summary>
+    public WindowInfo? LastWindow { get; private set; }
+
+    private const int DefaultFindTimeoutMs = 3000;
+    private const int FindPollMs = 200;
 
     public bool IsCancelled { get; private set; }
 
@@ -55,6 +70,7 @@ internal sealed class MacroPlayer
     {
         IsCancelled = false;
         _stopRequested = false;
+        LastWindow = null;
         var actions = _macro.Actions;
         int repeatCount = Math.Max(1, _macro.RepeatCount);
 
@@ -82,6 +98,20 @@ internal sealed class MacroPlayer
                         return;
 
                     if (!ExecuteMouseClick(action))
+                    {
+                        IsCancelled = true;
+                        return;
+                    }
+                }
+                else if (action.Type is ActionType.FindWindow or ActionType.WindowClick)
+                {
+                    Sleep(action.DelayMs);
+
+                    if (HandleStopRequestIfAny())
+                        return;
+
+                    bool ok = action.Type == ActionType.FindWindow ? ExecuteFindWindow(action) : ExecuteWindowClick(action);
+                    if (!ok)
                     {
                         IsCancelled = true;
                         return;
@@ -166,6 +196,119 @@ internal sealed class MacroPlayer
             return 0;
 
         return configured * speed;
+    }
+
+    private void Log(string message) => OnLog?.Invoke(message);
+
+    /// <summary>Looks for the window until it appears or the timeout passes. Returns false if playback must stop.</summary>
+    private bool ExecuteFindWindow(ActionRecord action)
+    {
+        int timeoutMs = Math.Max(0, action.TimeoutMs ?? DefaultFindTimeoutMs);
+        string what = $"title '{action.WindowTitle}'" + (string.IsNullOrWhiteSpace(action.ProcessName) ? "" : $", process '{action.ProcessName}'");
+
+        var clock = Stopwatch.StartNew();
+        WindowInfo? found;
+        while (true)
+        {
+            found = WindowFinder.Find(action.WindowTitle, action.ProcessName);
+            if (found != null || clock.ElapsedMilliseconds >= timeoutMs)
+                break;
+
+            SleepInterruptible(FindPollMs);
+            if (HandleStopRequestIfAny())
+                return false;
+        }
+
+        LastWindow = found;
+        if (found != null)
+        {
+            Log("Found window " + found.Describe());
+            return true;
+        }
+
+        Log($"No window found with {what} (waited {timeoutMs}ms).");
+        var decision = OnWindowNotFound?.Invoke(action) ?? MismatchDecision.Stop;
+        if (decision == MismatchDecision.Continue)
+            Log("Continuing; window clicks are skipped until the next FindWindow finds a window.");
+        return decision == MismatchDecision.Continue;
+    }
+
+    /// <summary>Clicks a point relative to the last found window. Returns false if playback must stop.</summary>
+    private bool ExecuteWindowClick(ActionRecord action)
+    {
+        if (LastWindow == null)
+        {
+            Log("Window click skipped: no window was found before it.");
+            return true;
+        }
+
+        var window = WindowFinder.Refresh(LastWindow.Handle);
+        if (window == null)
+        {
+            Log("Window click skipped: the window was closed.");
+            return true;
+        }
+
+        var mode = action.ClickMode ?? WindowClickMode.Background;
+        if (window.IsMinimized)
+        {
+            if (mode == WindowClickMode.Background)
+            {
+                Log($"Window click skipped: '{window.Title}' is minimized.");
+                return true;
+            }
+
+            NativeMethods.ShowWindow(window.Handle, NativeMethods.SW_RESTORE);
+            SleepInterruptible(300);
+            window = WindowFinder.Refresh(window.Handle);
+            if (window == null || window.IsMinimized)
+            {
+                Log("Window click skipped: the window could not be restored.");
+                return true;
+            }
+        }
+        LastWindow = window;
+
+        var anchor = action.Anchor ?? WindowAnchor.TopLeft;
+        var windowPoint = WindowInput.ToWindowPoint(window.Bounds.Size, anchor, action.X, action.Y);
+        var screenPoint = new Point(window.Bounds.X + windowPoint.X, window.Bounds.Y + windowPoint.Y);
+
+        if (!VerifyWindowClick(action, window, windowPoint))
+            return false;
+
+        Log($"Clicking '{window.Title}' at window ({windowPoint.X},{windowPoint.Y}) = screen ({screenPoint.X},{screenPoint.Y}), {mode} mode.");
+        if (mode == WindowClickMode.Foreground)
+            WindowInput.ForegroundClick(window.Handle, screenPoint, action.Button, EffectiveMouseMoveSpeed());
+        else
+            WindowInput.BackgroundClick(window.Handle, screenPoint, action.Button);
+        return true;
+    }
+
+    /// <summary>
+    /// Compares the window's own rendering (PrintWindow, so covering windows do not matter) with the
+    /// action's reference image. Returns true when the click may go ahead.
+    /// </summary>
+    private bool VerifyWindowClick(ActionRecord action, WindowInfo window, Point windowPoint)
+    {
+        string refPath = Path.Combine(_macroFolder, "images", action.ImageFile ?? "");
+        if (action.ImageFile == null || !File.Exists(refPath))
+            return true; // no reference image: click without verification
+
+        var area = new Rectangle(windowPoint.X + action.RefOffsetX, windowPoint.Y + action.RefOffsetY, action.RefWidth, action.RefHeight);
+        using var whole = WindowCapture.Capture(window.Handle);
+        using var current = whole != null
+            ? WindowCapture.Crop(whole, area)
+            : ScreenCapture.Capture(window.Bounds.X + area.X, window.Bounds.Y + area.Y, area.Width, area.Height);
+
+        using var reference = new Bitmap(refPath);
+        double threshold = action.Threshold > 0 ? action.Threshold : _macro.SimilarityThreshold;
+        double similarity = ImageComparer.CalculateSimilarity(reference, current);
+        Log($"Window click verification: similarity {similarity:0.0}% (required {threshold:0.0}%).");
+
+        if (similarity >= threshold)
+            return true;
+
+        return (OnMismatch?.Invoke(action, similarity, threshold, reference, current) ?? MismatchDecision.Stop) == MismatchDecision.Continue;
     }
 
     private bool ExecuteMouseClick(ActionRecord action)

@@ -18,6 +18,10 @@ public sealed class MainForm : Form
     private readonly Button _stopButton = new() { Text = "Stop Recording", Dock = DockStyle.Top, Height = 40, Enabled = false };
     private readonly Button _playButton = new() { Text = "Play Macro", Dock = DockStyle.Top, Height = 40 };
     private readonly Button _reviewButton = new() { Text = "Review Screenshots", Dock = DockStyle.Top, Height = 32 };
+    private readonly Button _windowToolButton = new() { Text = "Window Tool (find / click)", Dock = DockStyle.Top, Height = 32 };
+
+    // Playback log: e.g. the position, size and monitor of windows found by FindWindow actions.
+    private readonly TextBox _logBox = new() { Dock = DockStyle.Bottom, Height = 130, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = true };
 
     // Playback-only, not persisted to the macro's actions.json: clamps recorded delays over
     // 500ms down to 500ms in memory while playing, without touching the saved macro.
@@ -41,17 +45,17 @@ public sealed class MainForm : Form
     private string? _recordingMacroName;
     private bool _isPlaying;
     private bool _loadingSettings;
-    private GlobalHook? _playbackEscHook;
 
     public MainForm()
     {
         Text = "SmartMacroAutomation";
         Width = 640;
-        Height = 560;
+        Height = 660;
         StartPosition = FormStartPosition.CenterScreen;
 
         var leftPanel = new Panel { Dock = DockStyle.Left, Width = 240, Padding = new Padding(8), AutoScroll = true };
         // Added in reverse order because Dock = Top stacks each new control above the previous one.
+        leftPanel.Controls.Add(_windowToolButton);
         leftPanel.Controls.Add(_editButton);
         leftPanel.Controls.Add(_reviewButton);
         leftPanel.Controls.Add(_playButton);
@@ -73,6 +77,8 @@ public sealed class MainForm : Form
         centerPanel.Controls.Add(_macroList);
         var listLabel = new Label { Text = "Macros (each is a folder under .\\Macros):", Dock = DockStyle.Top, Height = 20 };
         centerPanel.Controls.Add(listLabel);
+        centerPanel.Controls.Add(new Label { Text = "Playback log:", Dock = DockStyle.Bottom, Height = 20 });
+        centerPanel.Controls.Add(_logBox);
 
         Controls.Add(centerPanel);
         Controls.Add(leftPanel);
@@ -85,6 +91,7 @@ public sealed class MainForm : Form
         _stopButton.Click += StopButton_Click;
         _playButton.Click += PlayButton_Click;
         _reviewButton.Click += ReviewButton_Click;
+        _windowToolButton.Click += WindowToolButton_Click;
         _macroList.SelectedIndexChanged += (_, _) => LoadSelectedMacroSettings();
         _thresholdInput.ValueChanged += (_, _) => SaveCurrentSettings();
         _repeatInput.ValueChanged += (_, _) => SaveCurrentSettings();
@@ -268,6 +275,7 @@ public sealed class MainForm : Form
         _editButton.Enabled = !recording;
         _playButton.Enabled = !recording;
         _reviewButton.Enabled = !recording;
+        _windowToolButton.Enabled = !recording;
         _macroList.Enabled = !recording;
         _thresholdInput.Enabled = !recording;
         _repeatInput.Enabled = !recording;
@@ -283,6 +291,17 @@ public sealed class MainForm : Form
 
         using var reviewForm = new ReviewForm(macro);
         reviewForm.ShowDialog(this);
+    }
+
+    private void WindowToolButton_Click(object? sender, EventArgs e)
+    {
+        using var tool = new WindowToolForm(SelectedMacroName);
+        tool.ShowDialog(this);
+    }
+
+    private void AppendLog(string line)
+    {
+        _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
     }
 
     private void PlayButton_Click(object? sender, EventArgs e)
@@ -303,6 +322,8 @@ public sealed class MainForm : Form
         _removeDelaysCheckbox.Enabled = false;
         _statusLabel.Text = $"Playing '{name}'...";
 
+        AppendLog($"Playing '{name}'...");
+
         var player = new MacroPlayer(macro)
         {
             RemoveAllDelays = _removeDelaysCheckbox.Checked,
@@ -310,61 +331,24 @@ public sealed class MainForm : Form
             {
                 Invoke(new MethodInvoker(() => _statusLabel.Text =
                     $"Playing '{name}': repeat {repeatIndex + 1}/{repeatCount}, step {actionIndex + 1}/{actionCount} ({action.Type})"));
-            },
-            OnMismatch = (action, similarity, threshold, reference, current) =>
-            {
-                return (MismatchDecision)Invoke(new Func<MismatchDecision>(() =>
-                {
-                    using var form = new MismatchForm(similarity, threshold, reference, current);
-                    form.ShowDialog(this);
-                    return form.Decision;
-                }))!;
-            },
-            OnEscRequested = () =>
-            {
-                return (MismatchDecision)Invoke(new Func<MismatchDecision>(() =>
-                {
-                    using var form = new PlaybackPausedForm();
-                    form.ShowDialog(this);
-                    return form.Decision;
-                }))!;
             }
         };
 
-        // Global low-level keyboard hook so Esc stops playback even when a different
-        // application has focus (playback moves focus/input to arbitrary target windows).
-        var escHook = new GlobalHook { IgnoreOwnProcessClicks = false };
-        escHook.KeyEvent += (_, args) =>
+        PlaybackSession.Start(player, this, line =>
         {
-            if (!args.IsKeyUp && args.VkCode == (int)Keys.Escape)
-                player.RequestStop();
-        };
-        escHook.Start();
-        _playbackEscHook = escHook;
+            AppendLog(line);
+            _statusLabel.Text = line;
+        }, error =>
+        {
+            if (error != null)
+                MessageBox.Show(this, $"Playback error: {error.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-        System.Threading.Tasks.Task.Run(() =>
-        {
-            try
-            {
-                player.Play();
-            }
-            catch (Exception ex)
-            {
-                Invoke(new MethodInvoker(() => MessageBox.Show(this, $"Playback error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)));
-            }
-            finally
-            {
-                Invoke(new MethodInvoker(() =>
-                {
-                    _playbackEscHook?.Dispose();
-                    _playbackEscHook = null;
-                    _isPlaying = false;
-                    _playButton.Enabled = true;
-                    _recordButton.Enabled = true;
-                    _removeDelaysCheckbox.Enabled = true;
-                    _statusLabel.Text = player.IsCancelled ? $"Playback of '{name}' stopped by user." : $"Playback of '{name}' finished.";
-                }));
-            }
+            _isPlaying = false;
+            _playButton.Enabled = true;
+            _recordButton.Enabled = true;
+            _removeDelaysCheckbox.Enabled = true;
+            _statusLabel.Text = player.IsCancelled ? $"Playback of '{name}' stopped by user." : $"Playback of '{name}' finished.";
+            AppendLog(_statusLabel.Text);
         });
     }
 }

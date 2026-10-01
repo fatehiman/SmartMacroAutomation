@@ -3,16 +3,17 @@ using SmartMacroAutomation.Playback;
 namespace SmartMacroAutomation.UI;
 
 /// <summary>
-/// Shown when the user presses Esc during playback. Playback has already stopped by the
-/// time this dialog appears; the user decides whether to resume or stop for good.
+/// Shown when the user presses Esc during playback (or for another pause reason, such as a window
+/// that was not found). Playback has already stopped by the time this dialog appears; the user
+/// decides whether to resume or stop for good.
 /// </summary>
 internal sealed class PlaybackPausedForm : Form
 {
     public MismatchDecision Decision { get; private set; } = MismatchDecision.Stop;
 
-    public PlaybackPausedForm()
+    public PlaybackPausedForm(string? reason = null, string title = "Playback stopped")
     {
-        Text = "Playback stopped";
+        Text = title;
         Width = 360;
         Height = 170;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -23,7 +24,7 @@ internal sealed class PlaybackPausedForm : Form
 
         var message = new Label
         {
-            Text = "Playback was stopped because Esc was pressed.\n\nDo you want to continue this macro?",
+            Text = (reason ?? "Playback was stopped because Esc was pressed.") + "\n\nDo you want to continue this macro?",
             Left = 12,
             Top = 12,
             Width = 320,

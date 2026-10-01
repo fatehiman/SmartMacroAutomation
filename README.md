@@ -11,18 +11,22 @@ The goal is to provide the simplicity of traditional macro automation while maki
 ## Implementation
 
 * **Language / stack:** C# on .NET 8, using Windows Forms for the UI.
-* **Platform:** Windows only. It uses native Win32 APIs (`SetWindowsHookEx`, `SendInput`, `CopyFromScreen`) for global mouse/keyboard capture, input simulation, and screenshots.
+* **Platform:** Windows only. It uses native Win32 APIs (`SetWindowsHookEx`, `SendInput`, `CopyFromScreen`) for global mouse/keyboard capture, input simulation, and screenshots, plus `EnumWindows`, `PrintWindow` and `PostMessage` for the window actions (find a window, capture it even when covered, click it in the background).
 * **No database.** Every macro is a plain folder on disk:
 
   ```text
   Macros/
     MyMacro/
       actions.json     <- ordered list of recorded actions + settings
+      last-run.log     <- log of the last "--play" command-line run (if any)
       images/
         click_0000.png <- reference screenshot for the first mouse click
         click_0003.png
+        window_0001.png <- reference image for a WindowClick action
         ...
   ```
+
+  The `Macros` folder sits next to `SmartMacroAutomation.exe`. In `actions.json`, enum values are written as names (`"Type": "WindowClick"`, `"Anchor": "TopRight"`); older files that use numbers still load.
 
 * **Image comparison:** simple per-pixel RGB difference with a small color tolerance. No external image library is required.
 
@@ -68,6 +72,84 @@ Details:
 
 The implementation lives in `Native/HumanMouse.cs`, separate from the playback engine, so a more advanced path model (curves, small jitter, overshoot) can replace it later without touching `MacroPlayer`.
 
+### Window actions: find a window and click inside it
+
+Two action types work with a specific window instead of fixed screen coordinates. They are not recorded; you add them with the **Window Tool** (see below) or by editing `actions.json`.
+
+**`FindWindow`** finds a visible top-level window and makes it the target of the next `WindowClick` actions. It writes the window's position, size and monitor to the playback log:
+
+```text
+Found window 'NVIDIA Broadcast' (NVIDIA Broadcast): x=530 y=25 w=540px h=802px, monitor 2 (primary), position on that monitor x=530 y=25
+```
+
+* `x`/`y` are in virtual-screen pixels (all monitors form one coordinate space), so they are enough to locate the window on any monitor.
+* The monitor number is the `n` of Windows' `\\.\DISPLAYn` device name. If the window overlaps more than one monitor, the log says `spans monitors 1, 2` instead.
+* The size is the visible frame. The invisible resize border that Windows 10/11 adds is not counted.
+* A minimized window is found too, and the log says `is minimized`.
+
+| Field | Meaning |
+| --- | --- |
+| `WindowTitle` | Text the title must contain (case-insensitive). An exact title match wins over a partial one; otherwise the topmost matching window wins. |
+| `ProcessName` | Optional. Process name without `.exe`, e.g. `NVIDIA Broadcast`. |
+| `TimeoutMs` | How long to keep looking before giving up. Default 3000. |
+
+If no window is found in time, playback pauses and asks: **Continue** skips the window clicks that need it, **Stop** ends playback.
+
+**`WindowClick`** clicks a point inside the window found by the last `FindWindow`. The window position is read again just before the click, so it still works if the window moved.
+
+| Field | Meaning |
+| --- | --- |
+| `Anchor` | The window corner that `X`/`Y` are measured from: `TopLeft` (default), `TopRight`, `BottomLeft`, `BottomRight`. |
+| `X`, `Y` | Distance inward from that corner, in pixels. `TopRight`, `X=62`, `Y=15` = 62px left of the right edge and 15px below the top edge. A title-bar button stays hit even if the window is resized. |
+| `ClickMode` | `Background` (default) or `Foreground`, see below. |
+| `Button` | `Left` (default), `Right`, `Middle`. |
+| `ImageFile`, `RefOffsetX/Y`, `RefWidth/Height` | Optional reference image, relative to the click point, like a normal click. |
+| `DelayMs` | Wait before the action, like any other action. |
+
+Click modes:
+
+* **Background** - sends mouse messages (`WM_MOUSEMOVE`, then button down/up) straight to the window with `PostMessage`. The real cursor does not move, focus does not change, and **it works even when another window covers the target**. A few hover moves are sent first, because Chromium/Electron apps ignore a press without hover. If the window is minimized, the click is skipped (and logged), because there is nothing on screen to click.
+* **Foreground** - restores the window if needed, brings it to the front, glides the real cursor there (Mouse move speed setting) and clicks with `SendInput`. Use it for apps that ignore posted messages.
+
+Visual verification for window clicks uses `PrintWindow`: it compares the reference image with what the *window itself* draws, not with the screen. So a window lying on top does not cause a false mismatch. The macro's similarity threshold (or the action's own `Threshold`) applies, and a mismatch shows the same Continue / Stop dialog.
+
+Tip: some apps draw a button in another color while the mouse is over it. Chromium/Electron apps also stop repainting while they are fully covered, so the captured frame can still show an old hover state. For such buttons, crop the reference image down to just the icon (with **Review Screenshots**), so it matches in both states. The example macro below does this.
+
+Both window actions run per-monitor DPI aware, so the numbers are real pixels even on scaled monitors.
+
+### Window Tool
+
+The **Window Tool (find / click)** button opens a helper dialog:
+
+1. Type part of the window title (and optionally the process name), click **Find**. It shows the position, size, monitor, class name and handle, plus a picture of the window (taken with `PrintWindow`, so it works when the window is covered).
+2. Click on the picture to pick a point. The nearest corner is chosen as anchor; the label shows the point in window coordinates, its offset from the anchor and its screen position.
+3. Pick **Mode** and **Button**, then **Test Click** to try it on the real window.
+4. **Add to Selected Macro** appends a `FindWindow` (skipped if the macro already looks for this window last) and a `WindowClick` with a 24x24 reference image to the macro selected in the main window.
+
+### Example macro: minimize NVIDIA Broadcast
+
+NVIDIA Broadcast is an Electron app with a custom title bar, so the normal Windows ways to minimize it do not work. `examples/Macros/Minimize NVIDIA Broadcast/` minimizes it by clicking its own minimize button in the background:
+
+```json
+"Actions": [
+  { "Type": "FindWindow", "WindowTitle": "NVIDIA Broadcast", "ProcessName": "NVIDIA Broadcast", "TimeoutMs": 3000 },
+  { "Type": "WindowClick", "X": 62, "Y": 15, "Anchor": "TopRight", "ClickMode": "Background", "Button": "Left",
+    "ImageFile": "window_0001.png", "RefOffsetX": -5, "RefOffsetY": 0, "RefWidth": 10, "RefHeight": 2, "DelayMs": 300 }
+]
+```
+
+The reference image is only the 10x2 px dash of the minimize icon, so it matches whether or not the button is drawn in its hover state. If Broadcast is already minimized, the click is skipped. Tested with the window covered by Chrome: found, verified at 100%, minimized.
+
+To use it, copy the folder into the `Macros` folder next to `SmartMacroAutomation.exe`. Because of the `TopRight` anchor, the button is still found when the window is resized, as long as the title bar layout stays the same. If it does not (for example with display scaling other than 100%), recreate the click with the Window Tool.
+
+### Playing a macro from the command line
+
+```powershell
+SmartMacroAutomation.exe --play "Minimize NVIDIA Broadcast" [--remove-delays]
+```
+
+This plays one macro without opening the main window, for example from a desktop shortcut or Task Scheduler. Esc and the Continue / Stop dialogs work as usual. The log is saved to `Macros\<name>\last-run.log`. Exit code: `0` = finished, `1` = stopped or error, `2` = macro not found.
+
 ### Building from source
 
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download) on Windows.
@@ -92,8 +174,9 @@ This produces `publish/SmartMacroAutomation.exe`, a single file that runs on Win
 4. Optionally click **Review Screenshots** to inspect or crop the reference image captured for each click.
 5. Adjust **Similarity threshold**, **Repeat count**, **Speed**, and **Mouse move speed** for the selected macro as needed - changes save immediately.
 6. Optionally check **Remove all delays** to cap every recorded delay over 500ms down to 500ms for the next playback run only (short delays such as key-down/key-up are left alone). This is not saved with the macro.
-7. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue. Press **Esc** at any time to stop playback immediately and choose whether to continue or stop for good.
-8. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
+7. Optionally use **Window Tool** to add window actions (find a window by title, click a point inside it in the background). See [Window actions](#window-actions-find-a-window-and-click-inside-it).
+8. Select the macro and click **Play Macro** to replay it. If a click's on-screen area no longer matches its reference image (below the similarity threshold), playback pauses and asks whether to continue. Press **Esc** at any time to stop playback immediately and choose whether to continue or stop for good. The **Playback log** under the macro list shows progress, such as the position and size of windows found.
+9. Use **Edit in Notepad** to open a macro's `actions.json` directly for manual inspection or editing.
 
 Note: because start/stop/play are controlled from the app window (no global hotkeys), clicks on the SmartMacroAutomation window itself are automatically ignored while recording.
 
@@ -426,6 +509,11 @@ or, where appropriate, a sequence of text input may be represented as a text-ent
 * Direct macro editing via Notepad
 * "Remove all delays" playback option: caps recorded delays over 500ms to 500ms in memory only, without touching short delays or the saved macro
 * Esc stops playback immediately from anywhere, with a Continue/Stop confirmation
+* `FindWindow` action: find a window by title / process and log its position, size and monitor number
+* `WindowClick` action: click relative to a window corner, in the background (`PostMessage`, works when the window is covered) or in the foreground
+* Window click verification against the window's own rendering (`PrintWindow`), not the screen
+* Window Tool: inspect a window, pick a point on its picture, test-click it, add it to a macro
+* `--play` command line to run a macro without the main window
 
 ---
 
@@ -466,7 +554,8 @@ Potential future capabilities include:
 * OCR-based verification
 * Automatic target location detection
 * DPI and display scaling compensation
-* Window-relative coordinates
+* Window-relative coordinates for recorded clicks (window actions already have them)
+* Recording window actions directly instead of adding them with the Window Tool
 * Multi-monitor support
 * Different verification thresholds per action
 * Automatic retry when a target is temporarily unavailable

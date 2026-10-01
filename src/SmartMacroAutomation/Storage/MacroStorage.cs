@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SmartMacroAutomation.Models;
 
 namespace SmartMacroAutomation.Storage;
@@ -9,7 +10,15 @@ namespace SmartMacroAutomation.Storage;
 /// </summary>
 internal static class MacroStorage
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    // Enums are written as names ("WindowClick", "TopRight") so actions.json is easy to edit by hand.
+    // Older files that stored enums as numbers still load: the converter accepts both.
+    // Null fields (e.g. window settings on a key press) are left out to keep the file short.
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     public static string RootFolder => Path.Combine(AppContext.BaseDirectory, "Macros");
 

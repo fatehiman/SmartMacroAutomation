@@ -37,10 +37,17 @@ internal sealed class ReviewForm : Form
 
         for (int i = 0; i < macro.Actions.Count; i++)
         {
-            if (macro.Actions[i].Type == ActionType.MouseClick)
+            var action = macro.Actions[i];
+            if (action.Type == ActionType.MouseClick)
             {
                 _clickActionIndexes.Add(i);
-                _list.Items.Add($"Click #{_clickActionIndexes.Count} at ({macro.Actions[i].X},{macro.Actions[i].Y})");
+                _list.Items.Add($"Click #{_clickActionIndexes.Count} at ({action.X},{action.Y})");
+            }
+            else if (action.Type == ActionType.WindowClick && action.ImageFile != null)
+            {
+                // Window clicks store their reference rectangle relative to the click point too, so cropping works the same way.
+                _clickActionIndexes.Add(i);
+                _list.Items.Add($"Window click #{_clickActionIndexes.Count} ({action.Anchor ?? WindowAnchor.TopLeft} {action.X},{action.Y})");
             }
         }
 
